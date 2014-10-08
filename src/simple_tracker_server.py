@@ -14,7 +14,7 @@ import os
 from sys import exit, argv, stderr
 from myutils import draw_cross, draw_debug_messages, \
                hsv_filter_mask, calc_back_proj, halt
-from mytypes import Enum, State
+from mytypes import Enum, State, OneshotTimer
 from tracker_lib import TrackerRGBD
 from time import time
 
@@ -40,7 +40,7 @@ class TrackerRGBDServer:
         self.depth_subscriber = rospy.Subscriber(DEPTH_TOPIC_DEF, Image, self.depth_cb)
         self.face_roi_subscriber = rospy.Subscriber(FACE_ROI_TOPIC_DEF, RegionOfInterest, self.face_roi_cb)
         self.face_roi = None
-        self.face_det_timedout = False
+        self.face_timer = OneshotTimer(rospy.Duration(FACE_DETECTED_TIMEOUT_SEC))
         self.tracker = tracker
         self.state = State(['INIT', 'FACE_DETECTED', 'NO_FACE', 'LOST'], 'INIT')
         self.bridge = CvBridge()
@@ -48,21 +48,6 @@ class TrackerRGBDServer:
         cv2.namedWindow(DEPTH_WND)
         self.show_empty_images()
         rospy.loginfo('TrackerRGBDServer initialized')
-
-    def set_face_det_timer(self):
-        self.face_det_timedout = False
-        self.face_det_timer = rospy.Timer(rospy.Duration(FACE_DETECTED_TIMEOUT_SEC), self.on_face_det_timedout, oneshot=True)
-        rospy.loginfo('timer SET')
-    
-    def reset_face_det_timer(self):
-        self.face_det_timer.shutdown()
-        self.face_det_timedout = False
-        self.face_det_timer = rospy.Timer(rospy.Duration(FACE_DETECTED_TIMEOUT_SEC), self.on_face_det_timedout, oneshot=True)
-        rospy.loginfo('timer RESET')
-
-    def on_face_det_timedout(self, event):
-        rospy.loginfo('FACE TIMEOUT')
-        self.face_det_timedout = True
 
     def display_image(self, wnd, img):
         cv2.imshow(wnd, img)
@@ -98,19 +83,19 @@ class TrackerRGBDServer:
 
     def no_face_recently(self):
         assert self.state != 'INIT' 
-        return self.face_det_timedout
+        return self.face_timer.timedout
 
     def face_roi_cb(self, roim):
         self.face_roi = roim
         rospy.loginfo('.')
         if self.state == 'INIT':
             self.state.set('FACE_DETECTED')
-            self.set_face_det_timer()
+            self.face_timer.set()
         elif self.state == 'FACE_DETECTED':
-            self.reset_face_det_timer()
+            self.face_timer.reset()
         elif self.state == 'NO_FACE':
             self.state.set('FACE_DETECTED')
-            self.reset_face_det_timer()
+            self.face_timer.reset()
         #rospy.loginfo('face %d %d %d %d' % (roim.x_offset, roim.y_offset, roim.width, roim.height))
 
     def run(self):

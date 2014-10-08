@@ -20,3 +20,24 @@ class State:
     def __eq__(self, state):
         assert state in self.states
         return self.cur_state == state
+
+class OneshotTimer:
+    def __init__(self, duration):
+        self.duration = duration
+        self.timer = None
+        self.timedout = False
+
+    def on_timer(self, event):
+        self.timedout = True
+        rospy.loginfo('TIMEOUT')
+
+    def set(self):
+        self.timer = rospy.Timer(self.duration, self.on_timer, oneshot=True)
+        rospy.loginfo('timer SET')
+
+    def reset(self):
+        assert self.timer
+        self.timedout = False
+        self.timer.shutdown()
+        self.timer = rospy.Timer(self.duration, self.on_timer, oneshot=True)
+        rospy.loginfo('timer RESET')
