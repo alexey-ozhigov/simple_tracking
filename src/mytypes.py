@@ -29,15 +29,15 @@ class OneshotTimer:
 
     def on_timer(self, event):
         self.timedout = True
-        rospy.loginfo('TIMEOUT')
+        #rospy.loginfo('TIMEOUT')
 
     def set(self):
         self.timer = rospy.Timer(self.duration, self.on_timer, oneshot=True)
-        rospy.loginfo('timer SET')
+        #rospy.loginfo('timer SET')
 
     def reset(self):
         assert self.timer
         self.timedout = False
         self.timer.shutdown()
         self.timer = rospy.Timer(self.duration, self.on_timer, oneshot=True)
-        rospy.loginfo('timer RESET')
+        #rospy.loginfo('timer RESET')

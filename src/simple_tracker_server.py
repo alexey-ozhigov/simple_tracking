@@ -30,6 +30,8 @@ DEPTH_WND = 'Tracker Depth'
 DISP_WAIT_TIME_MS = 1
 FACE_EDGE_THRESHOLD = 0.05
 FACE_DETECTED_TIMEOUT_SEC = 3
+FACE_ROI_WIDTH_EXTENTION_K = 0.4
+FACE_ROI_HEIGHT_EXTENTION_K = 0.6
 
 
 
@@ -56,8 +58,8 @@ class TrackerRGBDServer:
     def show_empty_images(self):
         img = 255 * np.ones((640, 480), dtype='uint8')
         draw_debug_messages(img, ['NO IMAGE RECEIVED'])
-        #self.display_image(RGB_WND, img)
-        #self.display_image(DEPTH_WND, img)
+        self.display_image(RGB_WND, img)
+        self.display_image(DEPTH_WND, img)
 
     def cv_image_from_ros_msg(self, msg, enc='bgr8'):
         try:
@@ -71,6 +73,16 @@ class TrackerRGBDServer:
         img = self.cv_image_from_ros_msg(imgm)
         #self.display_image(RGB_WND, img)
 
+    def extended_face_roi(self, face_roi, img_shape):
+        extroi = RegionOfInterest()
+        wext = int(face_roi.width * FACE_ROI_WIDTH_EXTENTION_K)
+        hext = int(face_roi.height * FACE_ROI_HEIGHT_EXTENTION_K)
+        extroi.x_offset = max(face_roi.x_offset - wext, 0)
+        extroi.y_offset = max(face_roi.y_offset - hext, 0)
+        extroi.width = min(face_roi.width + 2*wext, img_shape[1] - extroi.x_offset - 1)
+        extroi.height = min(face_roi.height + 2*hext, img_shape[0] - extroi.y_offset - 1)
+        return extroi
+
     def depth_cb(self, imgm):
         img = self.cv_image_from_ros_msg(imgm, '32FC1')
         if self.state == 'INIT':
@@ -78,8 +90,12 @@ class TrackerRGBDServer:
         elif self.state == 'FACE_DETECTED':
             if self.no_face_recently():
                 self.state.set('NO_FACE')
-        edgemap = mono_edgemap(img[0:100, 0:100], thr=FACE_EDGE_THRESHOLD)
-        #self.display_image(DEPTH_WND, edgemap)
+            else:
+                extroi = self.extended_face_roi(self.face_roi, img.shape)
+                roi_img = img[extroi.y_offset: extroi.y_offset + extroi.height,
+                              extroi.x_offset: extroi.x_offset + extroi.width]
+                edgemap = mono_edgemap(roi_img, thr=FACE_EDGE_THRESHOLD)
+                self.display_image(DEPTH_WND, edgemap)
 
     def no_face_recently(self):
         assert self.state != 'INIT' 
@@ -87,7 +103,7 @@ class TrackerRGBDServer:
 
     def face_roi_cb(self, roim):
         self.face_roi = roim
-        rospy.loginfo('.')
+        #rospy.loginfo('.')
         if self.state == 'INIT':
             self.state.set('FACE_DETECTED')
             self.face_timer.set()
