@@ -2,7 +2,7 @@ from sensor_msgs.msg import Image
 from geometry_msgs.msg import Point
 
 
-class CamshiftRGBD:
+class TrackerRGBD:
     def __init__(self):
         self.target = Point()
 
