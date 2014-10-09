@@ -36,8 +36,8 @@ class OneshotTimer:
         #rospy.loginfo('timer SET')
 
     def reset(self):
-        assert self.timer
         self.timedout = False
-        self.timer.shutdown()
+        if self.timer is not None:
+            self.timer.shutdown()
         self.timer = rospy.Timer(self.duration, self.on_timer, oneshot=True)
         #rospy.loginfo('timer RESET')

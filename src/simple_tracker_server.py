@@ -17,6 +17,7 @@ from myutils import draw_cross, draw_debug_messages, \
 from mytypes import Enum, State, OneshotTimer
 from tracker_lib import TrackerRGBD
 from time import time
+import pickle
 
 NODE_NAME = 'simple_tracker_server'
 
@@ -32,8 +33,41 @@ FACE_EDGE_THRESHOLD = 0.05
 FACE_DETECTED_TIMEOUT_SEC = 3
 FACE_ROI_WIDTH_EXTENTION_K = 0.4
 FACE_ROI_HEIGHT_EXTENTION_K = 0.6
+FACE_DEPTH_DELTA_M = 0.05
+DEPTH_FOR_NAN_M = 20
 
 
+class Blob:
+    def __init__(self, center, hue):
+        self.center = center
+        self.hue = hue
+    
+    @staticmethod
+    def from_rgbd(rgb_img, depth_img, delta):
+        #1. Extract pixels approx. at the face distance
+        H, W = depth_img.shape[0:2]
+        ref_depth = depth_img[H/2, W/2]
+        #TODO: make sure ref_depth is valid (not nan)
+        m = np.max(depth_img)
+        depth_img[np.isnan(depth_img)] = DEPTH_FOR_NAN_M
+        points_further = np.where(depth_img > ref_depth - delta)
+        points_closer = np.where(depth_img < ref_depth + delta)
+        points_merged_further = zip(points_further[0], points_further[1])
+        points_merged_closer = zip(points_closer[0], points_closer[1])
+        points_merged = zip(*list(set.intersection(set(points_merged_further), set(points_merged_closer))))
+        #2. Go from the center upwards collecting hue values along the line
+        px, py = W/2, H/2
+        #all rgb pixels if their depth is not too big (e.g. distant objects up and beyond the head)
+        vert_rgb = np.array([[rgb_img[y, px] for y in range(0, py+1) if depth_img[y, px] < ref_depth + delta]])
+        vert_hue = cv2.split(cv2.cvtColor(vert_rgb, cv2.COLOR_BGR2HSV))[0]
+        hist = np.histogram(vert_hue, bins=30)
+        rospy.signal_shutdown(0)
+
+        dbg = np.zeros_like(rgb_img)
+        dbg[points_closer] = rgb_img[points_closer]
+        cv2.namedWindow('dbg')
+        cv2.imshow('dbg', dbg)
+        cv2.waitKey(DISP_WAIT_TIME_MS)
 
 class TrackerRGBDServer:
     def __init__(self, tracker):
@@ -42,9 +76,12 @@ class TrackerRGBDServer:
         self.depth_subscriber = rospy.Subscriber(DEPTH_TOPIC_DEF, Image, self.depth_cb)
         self.face_roi_subscriber = rospy.Subscriber(FACE_ROI_TOPIC_DEF, RegionOfInterest, self.face_roi_cb)
         self.face_roi = None
+        self.first_face_rgb = None   #for blob initialization
+        self.first_face_depth = None #for blob initialization
+        self.first_face_roi = None   #for blob initialization
         self.face_timer = OneshotTimer(rospy.Duration(FACE_DETECTED_TIMEOUT_SEC))
         self.tracker = tracker
-        self.state = State(['INIT', 'FACE_DETECTED', 'NO_FACE', 'LOST'], 'INIT')
+        self.state = State(['INIT', 'FIRST_FACE_DETECTED', 'FACE_DETECTED', 'NO_FACE', 'LOST'], 'INIT')
         self.bridge = CvBridge()
         cv2.namedWindow(RGB_WND)
         cv2.namedWindow(DEPTH_WND)
@@ -71,6 +108,19 @@ class TrackerRGBDServer:
 
     def rgb_cb(self, imgm):
         img = self.cv_image_from_ros_msg(imgm)
+        if self.state == 'FIRST_FACE_DETECTED':
+            if self.first_face_roi is None:
+                return
+            extroi = self.extended_face_roi(self.first_face_roi, img.shape)
+            roi_img = img[extroi.y_offset: extroi.y_offset + extroi.height,
+                          extroi.x_offset: extroi.x_offset + extroi.width]
+            self.first_face_rgb = roi_img.copy()
+            if self.first_face_depth is not None:
+                self.blobs = Blob.from_rgbd(self.first_face_rgb, self.first_face_depth, FACE_DEPTH_DELTA_M)
+                self.state.set('FACE_DETECTED')
+            else:
+                return
+        self.rgb_img = img.copy()
         #self.display_image(RGB_WND, img)
 
     def extended_face_roi(self, face_roi, img_shape):
@@ -87,6 +137,19 @@ class TrackerRGBDServer:
         img = self.cv_image_from_ros_msg(imgm, '32FC1')
         if self.state == 'INIT':
             pass
+        elif self.state == 'FIRST_FACE_DETECTED':
+                #extract face depthmap, then if corresp. rgb available - find blobs
+                if self.first_face_roi is None:
+                    return
+                extroi = self.extended_face_roi(self.first_face_roi, img.shape)
+                roi_img = img[extroi.y_offset: extroi.y_offset + extroi.height,
+                              extroi.x_offset: extroi.x_offset + extroi.width]
+                self.first_face_depth = roi_img
+                if self.first_face_rgb is not None:
+                    self.blobs = Blob.from_rgbd(self.first_face_rgb, self.first_face_depth, FACE_DEPTH_DELTA_M)
+                    self.state.set('FACE_DETECTED')
+                else:
+                    return
         elif self.state == 'FACE_DETECTED':
             if self.no_face_recently():
                 self.state.set('NO_FACE')
@@ -102,11 +165,13 @@ class TrackerRGBDServer:
         return self.face_timer.timedout
 
     def face_roi_cb(self, roim):
-        self.face_roi = roim
         #rospy.loginfo('.')
+        self.face_roi = roim
         if self.state == 'INIT':
-            self.state.set('FACE_DETECTED')
-            self.face_timer.set()
+            self.state.set('FIRST_FACE_DETECTED')
+        elif self.state == 'FIRST_FACE_DETECTED':
+            if self.first_face_roi is None:
+                self.first_face_roi = roim
         elif self.state == 'FACE_DETECTED':
             self.face_timer.reset()
         elif self.state == 'NO_FACE':
